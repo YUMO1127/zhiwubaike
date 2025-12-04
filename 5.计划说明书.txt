@@ -1,0 +1,296 @@
+软件设计说明书
+植物百科（微信小程序版）软件设计说明书
+文档基本信息
+文档标题	植物百科（微信小程序版）软件设计说明书
+文档版本	V1.0
+创建日期	2025-12-08
+修订历史	
+	V1.0
+一、引言
+1.1 编写目的
+本文档基于《植物百科（微信小程序版）软件需求规格说明书》，从技术实现角度定义系统的架构设计、数据模型、模块逻辑及接口规范，为前端（微信小程序）、后端（Spring Boot）开发人员提供编码直接依据，同时确保设计方案满足“功能完整、可维护、易扩展”的需求目标。本文档面向开发人员、测试人员及项目评审人员，需结合需求文档同步使用。
+1.2 设计范围
+本设计覆盖“植物百科”V1.0版本（微信小程序）的全部核心功能，包括：
+前端：微信小程序端的首页搜索、图片识别、养护提醒、植物详情四大模块；
+后端：API网关、植物信息服务、识别服务、养护提醒服务四大核心服务；
+数据层：MySQL数据库（植物信息表、养护提醒表）及可选缓存层（Redis）；
+第三方集成：百度植物识别API的对接逻辑。不包含后续迭代的社区互动、PC端扩展等功能设计。
+1.3 术语定义
+术语/缩写	定义说明
+分层架构	后端采用“表现层→业务逻辑层→数据访问层”三层架构，职责边界清晰，便于维护
+API网关	后端统一接口入口，负责请求路由、参数校验、身份验证（基于微信OpenID）
+数据访问层（DAO）	后端与数据库交互的封装层，负责数据的CRUD操作，不包含业务逻辑
+业务逻辑层（Service）	后端核心层，实现业务规则（如搜索匹配、提醒日期校验），协调DAO层与外部服务
+表现层（Controller）	后端接收前端请求的层，负责参数接收、响应封装，调用Service层处理业务
+微信OpenID	微信用户在当前小程序的唯一标识，用于关联用户与养护提醒数据，无需用户注册
+1.4 参考文献
+1.《植物百科（微信小程序版）软件需求规格说明书》（V1.0，2025-12-05）
+2.《微信小程序开发官方文档-架构设计指南》（腾讯微信开放平台，2025）
+3.《Spring Boot分层架构最佳实践》（Spring社区，2025）
+4.《百度植物识别API接口开发手册》（百度AI开放平台，2025）
+5.《MySQL数据库设计规范》（Oracle官方文档，2025）
+二、系统总体设计
+2.1 系统架构设计
+本系统采用“前后端分离+后端分层架构”设计，前端为微信小程序（轻量化交互层），后端为Spring Boot服务（核心业务处理层），通过RESTful API通信，同时集成第三方服务与数据存储层，架构图如下：
+graph TD    subgraph 前端层：微信小程序        A1[首页与搜索模块] --> A[前端核心框架]        A2[图片识别模块] --> A        A3[养护提醒模块] --> A        A4[植物详情模块] --> A        A --> A5[微信API封装]  // 调用微信相册、相机、通知API    end        subgraph 通信层：RESTful API        B1[API请求封装]  // 前端：统一请求头、参数格式        B2[API响应处理]  // 前端：统一错误码、数据解析        B3[API网关]      // 后端：请求路由、参数校验、身份验证    end        subgraph 后端业务层：Spring Boot        C1[表现层（Controller）]  // 接收请求：/api/plant/*, /api/remind/*        C2[业务逻辑层（Service）]  // 核心逻辑：植物搜索、识别对接、提醒管理        C3[数据访问层（DAO）]      // 数据交互：MyBatis映射，操作MySQL        C4[第三方服务层]           // 对接：百度植物识别API        C1 --> C2 --> C3        C2 --> C4    end        subgraph 数据存储层        D1[MySQL数据库]  // 存储：植物信息表、养护提醒表        D2[可选：Redis缓存]  // 缓存：高频访问植物信息（如绿萝、多肉），降低DB压力        C3 --> D1        C3 --> D2    end        // 数据流    A --> B1 --> B3 --> C1    C1 --> B3 --> B2 --> A    C4 --> 百度API[百度植物识别API服务]
+架构分层职责说明
+层级	核心组件	职责描述
+前端层	四大功能模块+微信API封装	1. 提供用户交互界面（搜索框、识别按钮、提醒列表）；2. 调用微信原生API（相册、相机、本地存储）；3. 封装前端请求（统一请求头、错误处理）
+通信层	API网关+请求/响应封装	1. 后端API网关：路由请求到对应Controller，校验参数合法性；2. 前后端数据格式统一：请求用JSON，响应含“code（状态码）、data（数据）、msg（提示）”
+后端业务层	三层架构+第三方服务层	1. Controller：接收前端请求，返回标准化响应；2. Service：实现业务逻辑（如搜索关键词模糊匹配、提醒日期校验）；3. DAO：通过MyBatis执行SQL，操作数据库；4. 第三方服务层：封装百度API调用逻辑（参数加密、结果解析）
+数据存储层	MySQL+可选Redis	1. MySQL：存储结构化数据（植物信息、养护提醒）；2. Redis（可选）：缓存高频访问的植物信息（如TOP20常见植物），响应时间从200ms降至50ms
+2.2 核心设计思想
+本系统设计遵循**“简洁实用、可维护、易扩展”** 三大核心原则，具体落地为以下设计思想：
+2.2.1 遵循SOLID设计原则
+单一职责原则：每个模块/类仅负责单一功能。例如：后端PlantSearchService仅处理植物搜索逻辑，RecognitionService仅处理图片识别对接逻辑，避免“大而全”的类；
+开闭原则：对扩展开放，对修改关闭。例如：后续需替换植物识别API（如从百度改为形色），仅需新增XingseRecognitionService实现RecognitionService接口，无需修改现有调用逻辑；
+依赖倒置原则：依赖抽象而非具体实现。例如：后端Service层依赖PlantDAO接口（抽象），而非直接依赖PlantDAOImpl（具体实现），便于后续替换DAO层实现（如从MyBatis改为JPA）。
+2.2.2 前后端分离与数据解耦
+前后端职责分离：前端仅负责“界面渲染+用户交互”，不处理业务逻辑（如植物搜索的关键词匹配由后端完成）；后端仅负责“业务处理+数据存储”，不控制前端界面布局，通过API返回标准化数据，便于小程序独立迭代；
+数据与逻辑解耦：业务逻辑（如“提醒日期必须为未来”）封装在Service层，DAO层仅负责数据读写，避免SQL与业务逻辑混杂，提高代码可维护性。
+2.2.3 轻量优先与可扩展性平衡
+轻量优先：适配学生项目资源有限的特点，不引入复杂中间件（如不使用微服务、消息队列），采用单体Spring Boot应用+MySQL，部署简单（可使用学生云服务器）；
+预留扩展点：关键模块设计为接口化，便于后续扩展。例如：
+o植物信息来源：当前从MySQL读取，预留“对接植物园API”扩展点（新增BotanicalGardenPlantDAO实现PlantDAO）；
+o提醒通知方式：当前仅小程序本地提醒，预留“微信模板消息通知”扩展点（新增WechatNoticeService）。
+2.2.4 易用性与性能兼顾
+前端易用性：界面遵循微信小程序设计规范（如按钮位置、弹窗样式），核心操作步骤≤3步（如识别植物：点击按钮→选图→看结果）；
+后端性能优化：高频访问的植物信息（如绿萝、多肉）通过Redis缓存，减少MySQL查询次数；图片识别请求采用“异步回调”（可选），避免前端长时间等待。
+2.3 技术选型说明
+基于“学生项目易上手、开发效率高、成本低”的目标，技术选型延续前期规划，具体说明如下：
+技术领域	选型	选型理由	架构适配性
+前端框架	微信原生小程序开发框架	1. 学生熟悉微信生态，学习成本低；2. 官方组件丰富（如picker-view日期选择、image预览），无需额外引入UI库；3. 支持实时预览与调试，适配小程序交互场景	与前端层“轻量化交互”需求匹配，可快速实现四大功能模块
+后端框架	Spring Boot 2.7.x（Java）	1. 自动配置减少XML配置，学生易上手；2. 支持RESTful API开发，与前端API调用需求匹配；3. 集成MyBatis简单，无需复杂配置	适配后端分层架构，Controller/Service/DAO层职责清晰，开发效率高
+数据访问	MyBatis 3.x	1. SQL与Java代码分离（XML配置），学生易调试；2. 支持动态SQL（如植物搜索的模糊查询like concat('%', #{keyword}, '%')）；3. 与Spring Boot集成成熟，无需额外依赖	适配DAO层“数据交互”需求，简化MySQL操作
+数据库	MySQL 8.0（社区版）	1. 开源免费，安装配置简单；2. 关系型数据库，适合存储“植物-提醒”的关联数据；3. 支持SQL语句，学生课程中常用，易编写查询逻辑	适配数据存储层“结构化数据”需求，与DAO层MyBatis完美兼容
+缓存（可选）	Redis 6.x	1. 开源免费，支持Key-Value存储，适合缓存简单数据；2. 操作简单（如set(key, value, expire)），学生易上手；3. 降低MySQL压力，提升高频请求响应速度	适配“性能优化”需求，可选择性集成，不影响核心功能
+第三方API	百度植物识别API（免费版）	1. 免费额度满足测试需求（每月1000次）；2. 接口文档清晰，含Java调用示例；3. 识别准确率高（常见植物≥90%）	适配后端“第三方服务层”需求，无需自研识别算法，快速落地功能
+三、数据库设计
+3.1 概念结构设计（E-R图）
+系统核心实体包括用户（User）、植物信息（PlantInfo）、养护提醒（RemindInfo） ，三者的关系为：1个用户可创建多个养护提醒（一对多），1种植物可关联多个养护提醒（一对多），E-R图如下：
+erDiagram    User {        varchar(100) open_id PK  // 用户唯一标识（微信OpenID）        varchar(50) nick_name  // 用户昵称（可选，从微信获取）        varchar(200) avatar_url  // 用户头像（可选，从微信获取）        datetime create_time  // 首次访问时间    }        PlantInfo {        int plant_id PK  // 植物唯一ID（自增）        varchar(50) plant_name UK  // 植物名称（唯一）        varchar(30) category  // 植物分类（如藤本植物）        varchar(500) morphology  // 形态特征        varchar(500) habit  // 生长习性        varchar(300) distribution  // 分布区域（可选）        varchar(200) care_water  // 浇水要点        varchar(200) care_fertilizer  // 施肥要点        varchar(300) care_disease  // 病虫害防治（可选）        varchar(1000) image_urls  // 参考图片链接（多个用逗号分隔）        datetime update_time  // 信息更新时间    }        RemindInfo {        int remind_id PK  // 提醒唯一ID（自增）        varchar(100) open_id FK  // 关联用户OpenID        int plant_id FK  // 关联植物ID        varchar(20) remind_type  // 提醒类型（浇水/施肥/换盆）        date remind_date  // 提醒日期        varchar(50) remark  // 备注（可选）        tinyint status  // 状态（0=待提醒，1=已完成）        datetime create_time  // 创建时间        datetime update_time  // 更新时间    }        User ||--o{ RemindInfo : "创建"    PlantInfo ||--o{ RemindInfo : "关联"
+3.2 逻辑结构设计（核心类图）
+系统核心类包括前端的“页面类”和后端的“实体类、Service接口、DAO接口”，此处重点展示后端核心类图，体现类间关系：
+classDiagram    direction TB        // 实体类（与数据库表对应）    class User {        -String openId        -String nickName        -String avatarUrl        -Date createTime        +getOpenId()        +setOpenId(String)        // 其他getter/setter    }        class PlantInfo {        -Integer plantId        -String plantName        -String category        -String morphology        -String habit        -String careWater        -String careFertilizer        -String imageUrls        -Date updateTime        +getPlantId()        +setPlantId(Integer)        // 其他getter/setter    }        class RemindInfo {        -Integer remindId        -String openId        -Integer plantId        -String remindType        -Date remindDate        -String remark        -Integer status        -Date createTime        +getRemindId()        +setRemindId(Integer)        // 其他getter/setter    }        // DAO接口（数据访问）    class PlantInfoDAO {        <<Interface>>        +List~PlantInfo~ searchByKeyword(String keyword)        +PlantInfo getById(Integer plantId)    }        class RemindInfoDAO {        <<Interface>>        +int addRemind(RemindInfo remindInfo)        +List~RemindInfo~ getByOpenId(String openId)        +int updateRemind(RemindInfo remindInfo)        +int deleteRemind(Integer remindId)    }        class UserDAO {        <<Interface>>        +int addUser(User user)        +User getByOpenId(String openId)    }        // Service接口（业务逻辑）    class PlantService {        <<Interface>>        +List~PlantInfo~ searchPlant(String keyword)        +PlantInfo getPlantDetail(Integer plantId)    }        class RecognitionService {        <<Interface>>        +RecognitionResult recognizePlant(String imageBase64)    }        class RemindService {        <<Interface>>        +Boolean addRemind(RemindInfo remindInfo)        +List~RemindInfo~ getUserReminds(String openId)        +Boolean updateRemind(RemindInfo remindInfo)        +Boolean deleteRemind(Integer remindId)    }        // Service实现类    class PlantServiceImpl {        -PlantInfoDAO plantInfoDAO        +List~PlantInfo~ searchPlant(String keyword)        +PlantInfo getPlantDetail(Integer plantId)    }        class RecognitionServiceImpl {        -String apiKey  // 百度API密钥        -String secretKey  // 百度API密钥        +RecognitionResult recognizePlant(String imageBase64)    }        class RemindServiceImpl {        -RemindInfoDAO remindInfoDAO        +Boolean addRemind(RemindInfo remindInfo)        +List~RemindInfo~ getUserReminds(String openId)        +Boolean updateRemind(RemindInfo remindInfo)        +Boolean deleteRemind(Integer remindId)    }        // 依赖关系    PlantServiceImpl ..> PlantInfoDAO : depends on    PlantService <|-- PlantServiceImpl : implements        RecognitionService <|-- RecognitionServiceImpl : implements        RemindServiceImpl ..> RemindInfoDAO : depends on    RemindService <|-- RemindServiceImpl : implements        RemindInfo ..> User : associates with    RemindInfo ..> PlantInfo : associates with
+3.3 数据表设计（核心表结构）
+基于E-R图与类图，设计MySQL数据表结构，字段类型、约束与需求文档数据字典一致：
+3.3.1 植物信息表（plant_info）
+字段名	数据类型	长度	约束	备注
+plant_id	INT	-	PRIMARY KEY, AUTO_INCREMENT	植物唯一ID
+plant_name	VARCHAR	50	NOT NULL, UNIQUE	植物名称（如“绿萝”）
+category	VARCHAR	30	NOT NULL	植物分类（如“藤本植物”）
+morphology	VARCHAR	500	NOT NULL	形态特征
+habit	VARCHAR	500	NOT NULL	生长习性
+distribution	VARCHAR	300	NULL	分布区域（可选）
+care_water	VARCHAR	200	NOT NULL	浇水要点
+care_fertilizer	VARCHAR	200	NOT NULL	施肥要点
+care_disease	VARCHAR	300	NULL	病虫害防治（可选）
+image_urls	VARCHAR	1000	NOT NULL	参考图片链接（多个用“,”分隔）
+update_time	DATETIME	-	NOT NULL, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP	信息更新时间
+3.3.2 养护提醒表（remind_info）
+字段名	数据类型	长度	约束	备注
+remind_id	INT	-	PRIMARY KEY, AUTO_INCREMENT	提醒唯一ID
+open_id	VARCHAR	100	NOT NULL	关联用户微信OpenID
+plant_id	INT	-	NOT NULL	关联植物ID（外键关联plant_info.plant_id）
+remind_type	VARCHAR	20	NOT NULL, CHECK (remind_type IN ('浇水','施肥','换盆'))	提醒类型
+remind_date	DATE	-	NOT NULL	提醒日期（仅支持未来日期）
+remark	VARCHAR	50	NULL	备注（可选）
+status	TINYINT	-	NOT NULL, DEFAULT 0, CHECK (status IN (0,1))	状态（0=待提醒，1=已完成）
+create_time	DATETIME	-	NOT NULL, DEFAULT CURRENT_TIMESTAMP	创建时间
+update_time	DATETIME	-	NOT NULL, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP	更新时间
+3.3.3 用户表（user）
+字段名	数据类型	长度	约束	备注
+open_id	VARCHAR	100	PRIMARY KEY	用户唯一标识（微信OpenID）
+nick_name	VARCHAR	50	NULL	用户昵称（从微信接口获取）
+avatar_url	VARCHAR	200	NULL	用户头像链接（从微信接口获取）
+create_time	DATETIME	-	NOT NULL, DEFAULT CURRENT_TIMESTAMP	首次访问时间（自动记录）
+四、模块详细设计
+4.1 前端核心模块设计
+前端模块基于微信小程序“页面+组件”架构，核心模块包括首页与搜索模块、图片识别模块、养护提醒模块、植物详情模块，每个模块包含“页面逻辑（JS）、界面布局（WXML）、样式（WXSS）”三部分。
+4.1.1 模块一：图片识别模块
+4.1.1.1 功能概述
+实现“触发识别→权限检查→选择图片/拍照→图片校验→调用后端接口→展示识别结果”全流程，是系统核心交互模块之一。
+4.1.1.2 内部逻辑（活动图）
+@startuml 图片识别模块内部逻辑活动图start:用户点击首页“拍照识别”按钮;:调用微信wx.getSetting API，检查相册/相机权限;if (权限是否已授权) then (未授权)  :调用wx.authorize API，请求用户授权;  if (用户是否同意授权) then (拒绝)    :显示“需授权相册/相机权限才能使用识别功能”;    :提供“去设置”按钮，引导用户开启权限;    stop  else (同意)    :权限授权成功，进入图片选择流程;  endifelse (已授权)  :直接进入图片选择流程;endif:弹出“从相册选择”/“拍照”选项框;if (用户选择) then (拍照)  :调用wx.chooseImage API，指定sourceType: ['camera'];  :用户拍摄植物图片，点击“确认”;else (从相册选择)  :调用wx.chooseImage API，指定sourceType: ['album'];  :用户从相册选择1张图片;endif:获取图片临时路径（tempFilePath）;:校验图片格式（JPG/PNG）与大小（≤5MB）;if (校验结果) then (不通过)  :显示“仅支持JPG/PNG格式，大小不超过5MB”;  :返回识别入口，允许用户重新选择;else (通过)  :调用wx.getFileSystemManager().readFile API，将图片转为Base64格式;  :调用后端“/api/plant/recognize”接口，传入imageBase64参数;  :等待后端响应（显示“识别中...”加载动画）;endifif (后端响应结果) then (成功：code=200)  :解析响应数据（植物名称、置信度、plantId）;  if (置信度≥60%) then (置信度合格)    :显示识别结果（植物名称+置信度+参考图片）;    :提供“查看详情”按钮（跳转至植物详情页）和“重新识别”按钮;  else (置信度<60%)    :显示“识别结果可能不准确，建议拍摄清晰叶片”;    :仍展示识别结果，允许用户选择是否查看详情;  endifelse (失败：code≠200)  :根据错误码显示提示（如code=500：“识别服务异常，请稍后再试”）;  :提供“重试”按钮，允许用户重新发起识别;endifend@enduml
+4.1.1.3 关键组件设计
+权限检查组件（authCheck.js）：封装权限检查与请求逻辑，供其他模块复用（如后续新增“图片分享”功能）；
+图片校验组件（imageValidator.js）：封装格式（后缀名判断）与大小（通过图片信息计算）校验逻辑，返回布尔值与错误信息；
+加载动画组件（loadingToast.wxml）：全局复用的加载提示，显示“识别中...”“提交中...”等文案，避免重复开发。
+4.1.2 模块二：养护提醒模块
+4.1.2.1 功能概述
+实现“查看提醒列表→添加/编辑/删除提醒→状态更新”功能，核心是关联用户OpenID与植物ID，确保数据归属正确。
+4.1.2.2 内部逻辑（以“添加提醒”为例，活动图）
+@startuml 添加养护提醒内部逻辑活动图start:用户从植物详情页点击“添加养护提醒”按钮;:获取当前植物的plantId与plantName，传入添加提醒页面;:添加提醒页面加载，默认选中当前植物;:用户选择提醒类型（下拉框：浇水/施肥/换盆）;:用户点击日期选择框，调用wx.datePicker API;:限制日期选择范围（仅允许选择未来日期）;:用户选择提醒日期，确认后显示在页面;:用户可填写备注（可选，最多50字符）;:用户点击“保存”按钮;:前端校验表单（植物是否选中、类型是否选择、日期是否为未来）;if (校验结果) then (不通过)  :显示对应错误提示（如“请选择提醒类型”）;  :停留在添加页面，允许用户修改;else (通过)  :调用wx.getStorageSync API，获取本地存储的openId;  :构造提醒数据（openId、plantId、remindType、remindDate、remark）;  :调用后端“/api/remind/add”接口，传入提醒数据;  :等待后端响应（显示“保存中...”提示）;endifif (后端响应结果) then (成功：code=200)  :显示“添加提醒成功”;  :调用wx.navigateBack API，返回养护提醒列表页;  :列表页刷新数据，显示新添加的提醒（置顶）;else (失败：code≠200)  :根据错误码显示提示（如code=400：“提醒日期不能为过去日期”）;  :允许用户重新修改并保存;endifend@enduml
+4.1.2.3 关键设计点
+数据关联：添加提醒时，自动携带当前植物的plantId，避免用户手动选择植物，减少操作步骤；
+本地存储：用户首次访问时，通过wx.login+后端接口获取OpenID，存储在本地（wx.setStorageSync），后续所有提醒操作均携带该OpenID，确保数据归属当前用户；
+列表刷新：返回提醒列表页时，调用wx.navigateBack的success回调，触发列表数据重新请求，确保新添加的提醒实时显示。
+4.2 后端核心模块设计
+后端模块基于Spring Boot分层架构，核心模块包括API网关模块、植物信息服务模块、识别服务模块、养护提醒服务模块，每个模块通过“Controller→Service→DAO”三层协作实现功能。
+4.2.1 模块一：识别服务模块
+4.2.1.1 功能概述
+封装百度植物识别API的调用逻辑，接收前端传入的图片Base64数据，调用第三方API获取识别结果，关联本地植物信息库，返回标准化响应。
+4.2.1.2 内部逻辑（活动图）
+@startuml 识别服务模块内部逻辑活动图start:Controller层（PlantRecognitionController）接收前端请求;:校验请求参数（imageBase64是否为空）;if (参数校验) then (不通过)  :返回ResponseResult（code=400，msg=“图片数据不能为空”）;  stopelse (通过)  :调用RecognitionService.recognizePlant(imageBase64)方法;endif:Service层（RecognitionServiceImpl）处理核心逻辑;:第一步：获取百度API的Access Token（调用百度鉴权接口）;:检查Access Token是否已缓存（Redis，有效期24小时）;if (Token是否有效) then (已过期/未缓存)  :调用百度“https://aip.baidubce.com/oauth/2.0/token”接口;  :传入apiKey、secretKey，获取新的Access Token;  :将Token存入Redis，设置过期时间24小时;else (有效)  :直接从Redis获取Access Token;endif:第二步：调用百度植物识别API（https://aip.baidubce.com/rest/2.0/image-classify/v1/plant）;:构造请求参数（image=imageBase64，baike_num=1）;:设置请求头（Content-Type: application/x-www-form-urlencoded）;:发送POST请求，传入Access Token;:接收百度API返回的识别结果（含植物名称、置信度、百科信息）;if (百度API调用结果) then (失败)  :解析错误信息（如“图片格式错误”“API调用次数超限”）;  :返回ResponseResult（code=500，msg=错误信息）;  stopelse (成功)  :提取识别结果中的“name”（植物名称）和“score”（置信度）;  :调用PlantInfoDAO.searchByKeyword(name)，查询本地植物信息库;  if (是否匹配到本地植物) then (未匹配到)    :返回ResponseResult（code=200，data={name, score, plantId: null}，msg=“未查询到该植物的详细信息”）;  else (匹配到)    :提取匹配到的plantId、plantName、imageUrls等信息;    :封装RecognitionResult对象（name, score, plantId, plantName, imageUrls）;    :返回ResponseResult（code=200，data=RecognitionResult，msg=“识别成功”）;  endifendifend@enduml
+4.2.1.3 关键设计点
+Access Token缓存：百度API的Access Token有效期为24小时，存入Redis避免每次识别都调用鉴权接口，减少网络请求次数；
+本地植物关联：识别结果中的植物名称可能存在“别名”问题（如“绿萝”别名“黄金葛”），通过模糊查询（like concat('%', #{name}, '%')）提高匹配成功率；
+错误统一处理：封装百度API错误码与系统自定义错误码的映射关系（如百度API的110错误→系统500错误，提示“API调用次数超限”），便于前端统一处理。
+4.2.2 模块二：养护提醒服务模块
+4.2.2.1 功能概述
+处理养护提醒的添加、查询、编辑、删除逻辑，核心是“提醒日期校验”“用户数据隔离”（仅查询当前用户的提醒）。
+4.2.2.2 内部逻辑（以“添加提醒”为例，活动图）
+@startuml 后端添加养护提醒内部逻辑活动图start:Controller层（RemindController）接收前端请求;:获取请求参数（openId、plantId、remindType、remindDate、remark）;:调用RemindService.addRemind(remindInfo)方法;:Service层（RemindServiceImpl）处理核心逻辑;:第一步：参数合法性校验;:1. 校验openId是否为空（非空）;:2. 校验plantId是否存在（调用PlantInfoDAO.getById(plantId)，不存在则返回错误）;:3. 校验remindType是否为枚举值（浇水/施肥/换盆）;:4. 校验remindDate是否为未来日期（与当前日期比较，过去日期则返回错误）;if (校验结果) then (不通过)  :返回false，携带错误信息（如“植物ID不存在”“提醒日期需为未来日期”）;  stopendif:第二步：检查用户是否已存在（调用UserDAO.getByOpenId(openId)）;if (用户是否存在) then (不存在)  :创建User对象，设置openId、createTime，调用UserDAO.addUser(user);  :用户信息初始化成功;else (存在)  :无需处理，直接进入提醒添加流程;endif:第三步：封装RemindInfo对象（设置status=0，createTime=当前时间）;:调用RemindInfoDAO.addRemind(remindInfo)，执行SQL插入操作;:获取DAO层返回的影响行数（rows）;if (影响行数) then (rows>0)  :返回true，提示“添加提醒成功”;else (rows=0)  :返回false，提示“添加提醒失败，请稍后再试”;endifend@enduml
+4.2.2.3 关键设计点
+用户自动初始化：首次添加提醒的用户，系统自动通过OpenID创建用户记录，无需用户手动注册；
+数据隔离：所有提醒查询接口（如/api/remind/list）均传入openId参数，DAO层查询时附加where open_id = #{openId}条件，确保用户只能查看自己的提醒；
+日期校验：通过Java的LocalDate类比较remindDate与LocalDate.now()，避免添加过去日期的提醒，确保提醒功能有效。
+五、接口设计
+5.1 外部接口（第三方API）
+仅对接百度植物识别API，接口详情如下：
+接口名称	接口地址	请求方式	请求参数	响应参数（核心）	备注
+Access Token获取	https://aip.baidubce.com/oauth/2.0/token	POST	grant_type=client_credentials&client_id=API_KEY&client_secret=SECRET_KEY	access_token（令牌）、expires_in（有效期，秒）	用于后续识别API调用的鉴权
+植物识别	https://aip.baidubce.com/rest/2.0/image-classify/v1/plant	POST	image=图片Base64编码&baike_num=1	result（识别结果列表，含name、score、baike_info）	baike_num=1表示返回百科信息
+5.2 内部接口（前后端API）
+核心接口采用RESTful风格，统一前缀为/api，按功能分为“植物相关”“提醒相关”两类：
+5.2.1 植物相关接口
+接口路径	请求方式	请求参数	响应参数（JSON格式）	功能描述
+/api/plant/search	GET	keyword（String，必填，≥2字符）	{"code":200,"msg":"success","data":[{"plantId":1,"plantName":"绿萝","category":"藤本植物","imageUrl":"xxx.jpg"},...]}	模糊搜索植物名称，返回匹配的植物列表（简化信息，用于搜索结果页）
+/api/plant/detail	GET	plantId（Integer，必填）	{"code":200,"msg":"success","data":{"plantId":1,"plantName":"绿萝","category":"藤本植物","morphology":"叶片心形...","habit":"喜温暖湿润...","careWater":"每周1次...","imageUrls":["xxx1.jpg","xxx2.jpg"]}}	根据plantId获取植物完整信息（用于详情页）
+/api/plant/recognize	POST	imageBase64（String，必填）	{"code":200,"msg":"success","data":{"name":"绿萝","score":0.92,"plantId":1,"plantName":"绿萝","imageUrl":"xxx.jpg"}}	传入图片Base64，返回识别结果与关联植物信息
+5.2.2 养护提醒相关接口
+接口路径	请求方式	请求参数	响应参数（JSON格式）	功能描述
+/api/remind/add	POST	{"openId":"xxx","plantId":1,"remindType":"浇水","remindDate":"2025-12-20","remark":"避免浇到叶片"}	{"code":200,"msg":"添加提醒成功","data":null}	添加养护提醒
+/api/remind/list	GET	openId（String，必填）	{"code":200,"msg":"success","data":[{"remindId":1,"plantName":"绿萝","remindType":"浇水","remindDate":"2025-12-20","status":0},...]}	获取当前用户的所有养护提醒（按创建时间倒序）
+/api/remind/update	POST	{"remindId":1,"remindType":"施肥","remindDate":"2025-12-25","remark":"薄肥"}	{"code":200,"msg":"更新提醒成功","data":null}	编辑养护提醒（仅允许修改类型、日期、备注）
+/api/remind/delete	GET	remindId（Integer，必填）	{"code":200,"msg":"删除提醒成功","data":null}	删除养护提醒
+六、附录
+6.1 术语表（补充技术术语）
+术语	定义
+Base64	一种二进制到文本的编码方式，将图片转为字符串格式，便于通过API传输（避免二进制数据传输丢失）
+RESTful API	一种API设计风格，使用HTTP方法（GET/POST/PUT/DELETE）对应CRUD操作，URL路径表示资源（如/plant表示植物资源）
+临时路径（tempFilePath）	微信小程序中，通过chooseImage API获取的图片临时存储路径，有效期较短，需及时处理（如转为Base64）
+MyBatis	一款Java持久层框架，支持SQL与Java代码分离，通过XML或注解配置SQL语句，简化数据库操作
+6.2 补充说明
+1.本设计文档针对“植物百科”V1.0版本（微信小程序），后续若扩展APP版本或PC端，仅需新增前端模块，后端接口可复用（符合前后端分离设计）；
+2.Redis缓存为可选组件，学生项目初期可暂不集成，待后续用户量增加或查询性能下降时再引入；
+3.所有UML图可通过Mermaid在线编辑器（https://mermaid-js.github.io/mermaid-live-editor/）渲染查看，确保图形逻辑正确。
+4.后端代码需遵循“接口-实现类”分离原则，核心Service接口与DAO接口需编写Javadoc注释，便于开发人员理解功能。# 植物百科（微信小程序版）软件设计说明书
+文档基本信息
+文档标题	植物百科（微信小程序版）软件设计说明书
+文档版本	V1.0
+创建日期	2025-12-08
+修订历史	
+	V1.0
+一、引言
+1.1 编写目的
+本文档从技术实现角度，系统定义“植物百科”微信小程序的架构设计、数据模型、模块逻辑及接口规范，核心目标包括：
+1.为前端（微信小程序）、后端（Spring Boot）开发人员提供编码直接依据，确保开发过程对齐设计标准；
+2.明确核心模块的内部逻辑与交互关系，降低团队协作沟通成本；
+3.预留扩展接口，为后续迭代（如新增社区功能、APP版本）提供技术支撑。本文档面向开发人员、测试人员及项目评审人员，需结合《植物百科（微信小程序版）软件需求规格说明书》同步使用。
+1.2 设计范围
+本设计覆盖“植物百科”V1.0版本全部核心功能，具体包括：
+前端：微信小程序端的首页与搜索模块、图片识别模块、养护提醒模块、植物详情模块；
+后端：Spring Boot服务端的API网关模块、植物信息服务模块、识别服务模块、养护提醒服务模块；
+数据层：MySQL数据库设计（核心表结构）、可选Redis缓存设计；
+第三方集成：百度植物识别API对接逻辑。不包含后续迭代的“社区互动”“植物生长记录”“多语言支持”等扩展功能设计。
+1.3 术语定义
+术语/缩写	定义说明
+分层架构	后端采用“表现层（Controller）→业务逻辑层（Service）→数据访问层（DAO）”三层设计，职责边界清晰，便于维护与迭代
+RESTful API	一种API设计风格，通过HTTP方法（GET/POST）映射业务操作（查询/新增），URL路径表示资源（如/api/plant表示植物资源）
+微信OpenID	微信用户在当前小程序的唯一标识，无需用户注册，用于关联“用户-养护提醒”数据，确保数据归属正确
+Base64编码	二进制转文本编码方式，将植物图片转为字符串格式，便于通过API传输（避免二进制数据丢失）
+MyBatis	Java持久层框架，通过XML/注解配置SQL语句，实现DAO层与MySQL的交互，简化数据库操作
+1.4 参考文献
+1.《植物百科（微信小程序版）软件需求规格说明书》（V1.0，2025-12-05）
+2.《微信小程序开发官方文档-架构设计指南》（腾讯微信开放平台，2025）
+3.《Spring Boot分层架构最佳实践》（Spring社区，2025）
+4.《百度植物识别API接口开发手册》（百度AI开放平台，2025）
+5.《MySQL数据库设计规范》（Oracle官方文档，2025）
+二、系统总体设计
+2.1 系统架构设计
+本系统采用“前后端分离+后端分层架构”设计，前端聚焦轻量化交互，后端聚焦业务逻辑处理，通过RESTful API实现数据通信，同时集成第三方服务与数据存储层，架构图如下：
+graph TD    subgraph 前端层：微信小程序        A1[首页与搜索模块] --> A[前端核心框架]        A2[图片识别模块] --> A        A3[养护提醒模块] --> A        A4[植物详情模块] --> A        A --> A5[微信API封装]  // 调用微信相册、相机、本地存储API    end        subgraph 通信层：RESTful API        B1[前端请求封装]  // 统一请求头（如Content-Type: application/json）、错误处理        B2[后端API网关]   // 请求路由、参数校验、身份验证（基于OpenID）        B3[后端响应封装]  // 统一响应格式（code/msg/data）    end        subgraph 后端业务层：Spring Boot        C1[表现层（Controller）]  // 接收请求：/api/plant/*, /api/remind/*        C2[业务逻辑层（Service）]  // 核心逻辑：植物搜索、识别对接、提醒管理        C3[数据访问层（DAO）]      // 数据交互：MyBatis映射，操作MySQL        C4[第三方服务层]           // 封装百度植物识别API调用逻辑        C1 --> C2 --> C3        C2 --> C4    end        subgraph 数据存储层        D1[MySQL数据库]  // 存储：plant_info（植物信息）、remind_info（养护提醒）、user（用户）        D2[可选：Redis缓存]  // 缓存：高频访问植物信息（如绿萝、多肉），降低DB查询压力        C3 --> D1        C3 --> D2    end        // 数据流方向    A --> B1 --> B2 --> C1    C1 --> B3 --> B1 --> A    C4 --> 百度API[百度植物识别API服务]
+架构分层职责说明
+层级	核心组件	关键职责
+前端层	四大功能模块+微信API封装	1. 提供用户交互界面（搜索框、识别按钮、提醒列表）；2. 调用微信原生API（如wx.chooseImage选图、wx.getSetting查权限）；3. 封装前端请求（统一错误码处理，如网络异常提示）
+通信层	API网关+请求/响应封装	1. 后端API网关：路由请求到对应Controller，校验参数合法性（如keyword是否为空）；2. 统一数据格式：请求用JSON，响应含code（状态码）、msg（提示）、data（业务数据）
+后端业务层	三层架构+第三方服务层	1. Controller：接收前端请求，返回标准化响应；2. Service：实现业务逻辑（如植物搜索模糊匹配、提醒日期校验）；3. DAO：通过MyBatis执行SQL，操作数据库；4. 第三方服务层：封装百度API鉴权、参数加密、结果解析逻辑
+数据存储层	MySQL+可选Redis	1. MySQL：存储结构化数据（植物信息、养护提醒、用户OpenID）；2. Redis（可选）：缓存高频访问植物信息，响应时间从200ms降至50ms
+2.2 核心设计思想
+本系统设计遵循“简洁实用、可维护、易扩展”三大原则，结合学生项目特点与软件设计规范，落地为以下核心思想：
+2.2.1 遵循SOLID设计原则
+单一职责原则：每个模块/类仅负责单一功能。例如：后端PlantSearchService仅处理植物搜索逻辑，RecognitionService仅处理图片识别对接，避免“大而全”的臃肿类；
+开闭原则：对扩展开放，对修改关闭。例如：后续需替换识别API（如从百度改为形色），仅需新增XingseRecognitionService实现RecognitionService接口，无需修改现有调用逻辑；
+依赖倒置原则：依赖抽象而非具体实现。例如：Service层依赖PlantDAO接口（抽象），而非直接依赖PlantDAOImpl（具体实现），便于后续替换DAO层技术（如从MyBatis改为JPA）。
+2.2.2 前后端分离与数据解耦
+前后端职责分离：前端仅负责“界面渲染+用户交互”，不处理业务逻辑（如植物搜索的关键词匹配由后端完成）；后端仅负责“业务处理+数据存储”，不控制前端界面布局，通过API返回标准化数据，便于小程序独立迭代；
+数据与逻辑解耦：业务逻辑（如“提醒日期必须为未来”）封装在Service层，DAO层仅负责数据读写，避免SQL与业务逻辑混杂（如不在DAO层判断日期合法性），提高代码可维护性。
+2.2.3 轻量优先与可扩展性平衡
+轻量优先：适配学生项目资源有限的特点，不引入复杂中间件（如微服务、消息队列），采用单体Spring Boot应用+MySQL，部署简单（可使用学生云服务器）；
+预留扩展点：关键模块接口化设计，便于后续扩展。例如：
+o植物信息来源：当前从MySQL读取，预留“对接植物园API”扩展点（新增BotanicalGardenPlantDAO实现PlantDAO）；
+o提醒通知：当前仅小程序本地提醒，预留“微信模板消息”扩展点（新增WechatNoticeService）。
+2.2.4 易用性与性能兼顾
+前端易用性：遵循微信小程序设计规范（如按钮位置、弹窗样式），核心操作步骤≤3步（如识别植物：点击按钮→选图→看结果）；
+后端性能优化：高频访问的植物信息（如TOP20常见植物）通过Redis缓存，减少MySQL查询次数；图片识别请求采用“异步回调”（可选），避免前端长时间等待。
+2.3 技术选型说明
+基于“学生项目易上手、开发效率高、成本低”目标，技术选型延续前期规划，具体适配性说明如下：
+技术领域	选型	选型理由	架构适配性
+前端框架	微信原生小程序开发框架	1. 学生熟悉微信生态，学习成本低；2. 官方组件丰富（如picker-view日期选择、image预览），无需额外引入UI库；3. 支持实时预览与调试，适配小程序交互场景	与前端层“轻量化交互”需求匹配，可快速实现四大功能模块
+后端框架	Spring Boot 2.7.x（Java）	1. 自动配置减少XML配置，学生易上手；2. 支持RESTful API开发，与前端API调用需求匹配；3. 集成MyBatis简单，无需复杂依赖	适配后端分层架构，Controller/Service/DAO层职责清晰，开发效率高
+数据访问	MyBatis 3.x	1. SQL与Java代码分离（XML配置），学生易调试；2. 支持动态SQL（如植物搜索模糊查询like concat('%', #{keyword}, '%')）；3. 与Spring Boot集成成熟	适配DAO层“数据交互”需求，简化MySQL操作
+数据库	MySQL 8.0（社区版）	1. 开源免费，安装配置简单；2. 关系型数据库，适合存储“植物-提醒”关联数据；3. 支持SQL语句，学生课程中常用	适配数据存储层“结构化数据”需求，与DAO层MyBatis完美兼容
+缓存（可选）	Redis 6.x	1. 开源免费，支持Key-Value存储，操作简单；2. 降低MySQL压力，提升高频请求响应速度	适配“性能优化”需求，可选择性集成，不影响核心功能
+第三方API	百度植物识别API（免费版）	1. 免费额度满足测试需求（每月1000次）；2. 接口文档清晰，含Java调用示例；3. 识别准确率高（常见植物≥90%）	适配后端“第三方服务层”需求，无需自研识别算法，快速落地功能
+三、数据库设计
+3.1 概念结构设计（E-R图）
+系统核心实体包括用户（User）、植物信息（PlantInfo）、养护提醒（RemindInfo） ，三者关系为：1个用户可创建多个养护提醒（一对多），1种植物可关联多个养护提醒（一对多），E-R图如下：
+erDiagram    User {        varchar(100) open_id PK  // 用户唯一标识（微信OpenID）        varchar(50) nick_name  // 用户昵称（可选，从微信获取）        varchar(200) avatar_url  // 用户头像（可选，从微信获取）        datetime create_time  // 首次访问时间    }        PlantInfo {        int plant_id PK  // 植物唯一ID（自增）        varchar(50) plant_name UK  // 植物名称（唯一，如“绿萝”）        varchar(30) category  // 植物分类（如“藤本植物”）        varchar(500) morphology  // 形态特征        varchar(500) habit  // 生长习性        varchar(300) distribution  // 分布区域（可选）        varchar(200) care_water  // 浇水要点        varchar(200) care_fertilizer  // 施肥要点        varchar(300) care_disease  // 病虫害防治（可选）        varchar(1000) image_urls  // 参考图片链接（多个用逗号分隔）        datetime update_time  // 信息更新时间    }        RemindInfo {        int remind_id PK  // 提醒唯一ID（自增）        varchar(100) open_id FK  // 关联用户OpenID        int plant_id FK  // 关联植物ID        varchar(20) remind_type  // 提醒类型（浇水/施肥/换盆）        date remind_date  // 提醒日期        varchar(50) remark  // 备注（可选）        tinyint status  // 状态（0=待提醒，1=已完成）        datetime create_time  // 创建时间        datetime update_time  // 更新时间    }        User ||--o{ RemindInfo : "创建"  // 用户→养护提醒：一对多    PlantInfo ||--o{ RemindInfo : "关联"  // 植物→养护提醒：一对多
+3.2 逻辑结构设计（核心类图）
+后端核心类包括“实体类、DAO接口、Service接口及实现类”，类间关系体现“依赖注入”与“接口实现”，类图如下：
+classDiagram    direction TB        // 实体类（与数据库表对应）    class User {        -String openId        -String nickName        -String avatarUrl        -Date createTime        +getOpenId()        +setOpenId(String)        // 其他getter/setter    }        class PlantInfo {        -Integer plantId        -String plantName        -String category        -String morphology        -String habit        -String careWater        -String careFertilizer        -String imageUrls        -Date updateTime        +getPlantId()        +setPlantId(Integer)        // 其他getter/setter    }        class RemindInfo {        -Integer remindId        -String openId        -Integer plantId        -String remindType        -Date remindDate        -String remark        -Integer status        -Date createTime        +getRemindId()        +setRemindId(Integer)        // 其他getter/setter    }        // DAO接口（数据访问）    class PlantInfoDAO {        <<Interface>>        +List~PlantInfo~ searchByKeyword(String keyword)  // 模糊搜索植物        +PlantInfo getById(Integer plantId)  // 按ID查植物详情    }        class RemindInfoDAO {        <<Interface>>        +int addRemind(RemindInfo remindInfo)  // 新增提醒        +List~RemindInfo~ getByOpenId(String openId)  // 查用户提醒列表        +int updateRemind(RemindInfo remindInfo)  // 编辑提醒        +int deleteRemind(Integer remindId)  // 删除提醒    }        // Service接口（业务逻辑）    class PlantService {        <<Interface>>        +List~PlantInfo~ searchPlant(String keyword)  // 植物搜索（含参数校验）        +PlantInfo getPlantDetail(Integer plantId)  // 植物详情（含异常处理）    }        class RecognitionService {        <<Interface>>        +RecognitionResult recognizePlant(String imageBase64)  // 图片识别    }        class RemindService {        <<Interface>>        +Boolean addRemind(RemindInfo remindInfo)  // 新增提醒（含日期校验）        +List~RemindInfo~ getUserReminds(String openId)  // 查用户提醒    }        // Service实现类    class PlantServiceImpl {        -PlantInfoDAO plantInfoDAO  // 依赖注入        +List~PlantInfo~ searchPlant(String keyword)        +PlantInfo getPlantDetail(Integer plantId)    }        class RecognitionServiceImpl {        -String apiKey  // 百度API密钥        -String secretKey        +RecognitionResult recognizePlant(String imageBase64)    }        class RemindServiceImpl {        -RemindInfoDAO remindInfoDAO  // 依赖注入        +Boolean addRemind(RemindInfo remindInfo)        +List~RemindInfo~ getUserReminds(String openId)    }        // 类间关系    PlantService <|-- PlantServiceImpl : implements    PlantServiceImpl ..> PlantInfoDAO : depends on        RecognitionService <|-- RecognitionServiceImpl : implements        RemindService <|-- RemindServiceImpl : implements    RemindServiceImpl ..> RemindInfoDAO : depends on        RemindInfo ..> User : associates with    RemindInfo ..> PlantInfo : associates with
+3.3 数据表设计（核心表结构）
+基于E-R图与类图，设计MySQL数据表结构，字段约束与需求文档数据字典一致：
+3.3.1 植物信息表（plant_info）
+字段名	数据类型	约束	备注
+plant_id	INT	PRIMARY KEY, AUTO_INCREMENT	植物唯一ID
+plant_name	VARCHAR(50)	NOT NULL, UNIQUE	植物名称（如“绿萝”）
+category	VARCHAR(30)	NOT NULL	植物分类（如“藤本植物”）
+morphology	VARCHAR(500)	NOT NULL	形态特征（如“叶片心形，绿色有光泽”）
+habit	VARCHAR(500)	NOT NULL	生长习性（如“喜温暖湿润，忌阳光直射”）
+distribution	VARCHAR(300)	NULL	分布区域（可选）
+care_water	VARCHAR(200)	NOT NULL	浇水要点（如“每周1次，见干见湿”）
+care_fertilizer	VARCHAR(200)	NOT NULL	施肥要点（如“每月1次薄肥”）
+care_disease	VARCHAR(300)	NULL	病虫害防治（可选）
+image_urls	VARCHAR(1000)	NOT NULL	参考图片链接（多个用“,”分隔）
+update_time	DATETIME	NOT NULL, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP	信息更新时间
+3.3.2 养护提醒表（remind_info）
+字段名	数据类型	约束	备注
+remind_id	INT	PRIMARY KEY, AUTO_INCREMENT	提醒唯一ID
+open_id	VARCHAR(100)	NOT NULL	关联用户微信OpenID
+plant_id	INT	NOT NULL, FOREIGN KEY (plant_id) REFERENCES plant_info(plant_id)	关联植物ID
+remind_type	VARCHAR(20)	NOT NULL, CHECK (remind_type IN ('浇水','施肥','换盆'))	提醒类型
+remind_date	DATE	NOT NULL	提醒日期（仅支持未来日期）
+remark	VARCHAR(50)	NULL	备注（可选）
+status	TINYINT	NOT NULL, DEFAULT 0, CHECK (status IN (0,1))	状态（0=待提醒，1=已完成）
+create_time	DATETIME	NOT NULL, DEFAULT CURRENT_TIMESTAMP	创建时间
+update_time	DATETIME	NOT NULL, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP	更新时间
+四、模块详细设计
+4.1 前端核心模块设计
+前端模块基于微信小程序“页面+组件”架构，核心模块包括图片识别模块、养护提醒模块（重点说明，其他模块逻辑类似），每个模块包含“页面逻辑（JS）、界面布局（WXML）、样式（WXSS）”。
+4.1.1 模块一：图片识别模块
+4.1.1.1 功能概述
+实现“触发识别→权限检查→选图/拍照→图片校验→调用后端接口→展示结果”全流程，是系统核心交互模块。
+4.1.1.2 内部逻辑（活动图）
+@startuml 图片识别模块内部逻辑start:用户点击首页“拍照识别”按钮;:调用wx.getSetting，检查相册/相机权限;if (权限是否授权) then (未授权)  :调用wx.authorize，请求用户授权;  if (用户是否同意) then (拒绝)    :显示“需授权权限才能使用识别功能”;    :提供“去设置”按钮，引导开启权限;    stop  else (同意)    :进入图片选择流程;  endifelse (已授权)  :进入图片选择流程;endif:弹出“从相册选择”/“拍照”选项框;if (用户选择) then (拍照)  :调用wx.chooseImage(sourceType: ['camera']);  :用户拍摄图片并确认;else (相册选择)  :调用wx.chooseImage(sourceType: ['album']);  :用户选择1张图片;endif:获取图片临时路径（tempFilePath）;:校验格式（JPG/PNG）与大小（≤5MB）;if (校验结果) then (不通过)  :显示“仅支持JPG/PNG，大小≤5MB”;  :返回识别入口，允许重新选择;else (通过)  :将图片转为Base64格式;  :调用后端“/api/plant/recognize”接口;  :显示“识别中...”加载动画;endifif (后端响应) then (成功：code=200)  :解析数据（植物名称、置信度、plantId）;  if (置信度≥60%) then (合格)    :显示识别结果（名称+置信度+参考图）;    :提供“查看详情”/“重新识别”按钮;  else (不合格)    :显示“识别可能不准确，建议拍清晰叶片”;    :仍展示结果，允许查看详情;  endifelse (失败：code≠200)  :显示错误提示（如“识别服务异常”）;  :提供“重试”按钮;endifend@enduml
+4.1.1.3 关键组件
+权限检查组件（authCheck.js）：封装权限检查与请求逻辑，供其他模块复用（如后续新增“图片分享”）；
+图片转Base64组件（image2Base64.js）：调用微信wx.getFileSystemManager().readFile，统一处理图片编码；
+加载动画组件（loadingToast.wxml）：全局复用的加载提示，避免重复开发。
+4.1.2 模块二：养护提醒模块（添加提醒流程）
+4.1.2.1 功能概述
+实现“关联植物→选择类型→选择日期→保存提醒”逻辑，核心是“用户数据隔离”与“日期校验”。
+4.1.2.2 内部逻辑（活动图）
+@startuml 添加养护提醒内部逻辑start:用户从植物详情页点击“添加养护提醒”;:携带当前植物的plantId/plantName进入添加页面;:页面加载，默认选中当前植物;:用户选择提醒类型（浇水/施肥/换盆）;:调用wx.datePicker，限制选择未来日期;:用户选择提醒日期并确认;:用户可填写备注（≤50字符）;:点击“保存”按钮;:前端校验（植物/类型/日期是否完整）;if (校验结果) then (不通过)  :显示对应错误（如“请选择提醒类型”）;  :停留在添加页面;else (通过)  :从本地存储获取openId;  :构造提醒数据（openId/plantId/类型/日期）;  :调用后端“/api/remind/add”接口;  :显示“保存中...”提示;endifif (后端响应) then (成功：code=200)  :显示“添加成功”;  :返回提醒列表页，刷新数据（新提醒置顶）;else (失败：code≠200)  :显示错误提示（如“日期需为未来”）;  :允许重新修改;endifend@enduml
+4.2 后端核心模块设计

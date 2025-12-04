@@ -1,0 +1,27 @@
+{
+  "name": "plant-encyclopedia",
+  "version": "1.0.0",
+  "description": "植物百科网页应用",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "antd": "^5.12.8",
+    "axios": "^1.6.3",
+    "react-router-dom": "^6.21.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.0.8"
+  },
+  "keywords": ["植物百科", "植物识别", "养护提醒"],
+  "author": "",
+  "license": "MIT"
+}
